@@ -11,30 +11,29 @@ OUTPUT_HTML_PATH: str = 'dashboard.html'
 # Grade Mappings
 # Maps standard categorical grades to numerical TA1 Score
 GRADE_MAPPING: Dict[str, float] = {
-    'A': 4.0,
-    'AB': 3.5,
-    'B': 3.0,
-    'BC': 2.5,
-    'C': 2.0,
-    'CD': 1.5,
-    'D': 1.0,
+    'A': 79.5,
+    'AB': 72.0,
+    'B': 64.5,
+    'BC': 57.0,
+    'C': 49.5,
+    'D': 34.0,
     'E': 0.0
 }
 
 # Grouping by Program Studi
 PROGRAM_STUDI_GROUPING: Dict[str, str] = {
-    'Informatika': 'beragam',
-    'Teknik Elektro': 'beragam',
-    'Sistem Informasi': 'setara'
+    'Informatika': 'dikelompokkan beragam',
+    'Teknik Elektro': 'dikelompokkan beragam',
+    'Sistem Informasi': 'dikelompokkan setara'
 }
 
 # Grouping Suggestion Fuzzy Mapping
 # Maps substring keywords found in the survey to canonical short names.
 GROUPING_SUGGESTION_MAPPING: Dict[str, str] = {
-    'beragam': 'beragam',
-    'setara': 'setara',
-    'sendiri': 'mandiri',
-    'mandiri': 'mandiri'
+    'beragam': 'dikelompokkan beragam',
+    'setara': 'dikelompokkan setara',
+    'sendiri': 'mandiri membuat kelompok',
+    'mandiri': 'mandiri membuat kelompok'
 }
 
 # Minimum sample size to display without a warning flag

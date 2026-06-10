@@ -5,6 +5,8 @@ Handles logic for computing statistics, generating summaries, and building the P
 import pandas as pd
 import plotly.express as px
 from typing import Tuple
+from datetime import datetime
+import os
 
 def compute_statistics(df: pd.DataFrame, config_module) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Compute average TA1 Score, Satisfaction, and grade counts per canonical group."""
@@ -22,6 +24,13 @@ def compute_statistics(df: pd.DataFrame, config_module) -> Tuple[pd.DataFrame, p
     
     grade_counts = df.groupby(['canonical_group', grade_col]).size().reset_index(name='Count')
     
+    # Calculate % getting A
+    a_counts = grade_counts[grade_counts[grade_col] == 'A'].copy()
+    a_counts = a_counts.rename(columns={'Count': 'A_Count'})
+    avg_score = avg_score.merge(a_counts[['canonical_group', 'A_Count']], on='canonical_group', how='left')
+    avg_score['A_Count'] = avg_score['A_Count'].fillna(0)
+    avg_score['Percent_A'] = (avg_score['A_Count'] / avg_score['Sample_Size']) * 100
+    
     return avg_score, grade_counts
 
 def generate_summary_text(avg_score: pd.DataFrame) -> str:
@@ -30,15 +39,32 @@ def generate_summary_text(avg_score: pd.DataFrame) -> str:
         return "Tidak ada data untuk dirangkum."
         
     # Find highest Score
-    best_group_row = avg_score.loc[avg_score['Average_TA1_Score'].idxmax()]
-    best_group = best_group_row['canonical_group']
-    best_score = best_group_row['Average_TA1_Score']
-    best_count = best_group_row['Sample_Size']
+    best_score_row = avg_score.loc[avg_score['Average_TA1_Score'].idxmax()]
+    best_score_group = best_score_row['canonical_group']
+    best_score = best_score_row['Average_TA1_Score']
     
-    summary = (
-        f"Berdasarkan data yang dianalisis, kelompok dengan strategi <strong>{best_group}</strong> "
-        f"memiliki rata-rata Nilai Tugas Akhir I tertinggi yaitu <strong>{best_score:.2f}</strong> "
-        f"(ukuran sampel: {best_count} mahasiswa)."
+    # Find highest Satisfaction
+    best_sat_row = avg_score.loc[avg_score['Average_Satisfaction'].idxmax()]
+    best_sat_group = best_sat_row['canonical_group']
+    best_sat = best_sat_row['Average_Satisfaction']
+    
+    if best_score_group == best_sat_group:
+        summary = (
+            f"Berdasarkan data yang dianalisis, kelompok dengan strategi <strong>{best_score_group}</strong> "
+            f"memiliki kinerja terbaik secara keseluruhan, dengan rata-rata Nilai Tugas Akhir I tertinggi (<strong>{best_score:.2f}</strong>) "
+            f"serta tingkat kepuasan tertinggi (<strong>{best_sat:.2f}/5.0</strong>)."
+        )
+    else:
+        summary = (
+            f"Berdasarkan data yang dianalisis, kelompok dengan strategi <strong>{best_score_group}</strong> "
+            f"memiliki rata-rata Nilai Tugas Akhir I tertinggi (<strong>{best_score:.2f}</strong>). "
+            f"Sementara itu, kelompok dengan strategi <strong>{best_sat_group}</strong> "
+            f"memiliki tingkat kepuasan mahasiswa tertinggi (<strong>{best_sat:.2f}/5.0</strong>)."
+        )
+        
+    summary += (
+        " <br><br><em>Catatan: Kategori 'mandiri' dan 'lainnya' yang muncul pada diagram preferensi masa depan merupakan "
+        "saran pengelompokan dari mahasiswa, bukan strategi yang diterapkan saat ini, sehingga tidak dievaluasi kinerjanya.</em>"
     )
     return summary
 
@@ -49,13 +75,46 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
     
     # Flag groups with small sample size
     min_sample = config_module.MIN_SAMPLE_SIZE
+    has_small_sample = (avg_score['Sample_Size'] < min_sample).any()
     avg_score['Display_Name'] = avg_score.apply(
-        lambda row: f"{row['canonical_group']} *" if row['Sample_Size'] < min_sample else row['canonical_group'],
+        lambda row: f"{row['canonical_group']}{' *' if row['Sample_Size'] < min_sample else ''}<br>(n={row['Sample_Size']})",
         axis=1
     )
     
-    # Map back to grade_counts
+    # Map back to df and grade_counts
+    df_merged = df.merge(avg_score[['canonical_group', 'Display_Name']], on='canonical_group', how='left')
     grade_counts = grade_counts.merge(avg_score[['canonical_group', 'Display_Name']], on='canonical_group', how='left')
+    
+    # Convert grade counts to percentages within each group
+    total_per_group = grade_counts.groupby('Display_Name')['Count'].transform('sum')
+    grade_counts['Percentage'] = (grade_counts['Count'] / total_per_group) * 100
+    
+    # Generate Summary Table HTML
+    table_html = """
+    <table class="summary-table">
+        <thead>
+            <tr>
+                <th>Strategi Pengelompokan</th>
+                <th>Rata-rata Nilai TA I</th>
+                <th>Rata-rata Kepuasan</th>
+                <th>% Mendapat Nilai A</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
+    for _, row in avg_score.sort_values('Average_TA1_Score', ascending=False).iterrows():
+        table_html += f"""
+            <tr>
+                <td>{row['canonical_group']}</td>
+                <td>{row['Average_TA1_Score']:.2f}</td>
+                <td>{row['Average_Satisfaction']:.2f}</td>
+                <td>{row['Percent_A']:.1f}%</td>
+            </tr>
+        """
+    table_html += """
+        </tbody>
+    </table>
+    """
     
     # Common layout settings
     layout_settings = dict(
@@ -77,6 +136,8 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
     )
     fig1.update_traces(texttemplate='%{text:.2f}', textposition='outside')
     fig1.update_layout(**layout_settings)
+    fig1.update_yaxes(range=[0, 100])
+    fig1.update_xaxes(tickangle=0)
     
     # Chart 4: Bar chart for Average Satisfaction
     fig4 = px.bar(
@@ -90,20 +151,28 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
     )
     fig4.update_traces(texttemplate='%{text:.2f}', textposition='outside')
     fig4.update_layout(**layout_settings)
+    fig4.update_yaxes(range=[0, 5])
+    fig4.update_xaxes(tickangle=0)
+    fig4.add_hline(y=3, line_dash="dash", line_color="orange", annotation_text="Netral (3.0)")
+    fig4.add_hline(y=4, line_dash="dash", line_color="green", annotation_text="Puas (4.0)")
     
     # Chart 2: Stacked Bar Chart for Grade Distribution
     grade_col = [col for col in df.columns if 'grade' in col.lower()][0]
     fig2 = px.bar(
         grade_counts, 
         x='Display_Name', 
-        y='Count', 
+        y='Percentage', 
         color=grade_col,
-        title="Distribusi Nilai TA I",
-        labels={'Display_Name': 'Strategi Pengelompokan', 'Count': 'Jumlah Mahasiswa'},
-        barmode='stack',
-        color_discrete_sequence=px.colors.qualitative.Pastel
+        title="Distribusi Nilai TA I (%)",
+        labels={'Display_Name': 'Strategi Pengelompokan', 'Percentage': 'Persentase Mahasiswa (%)'},
+        barmode='group',
+        color_discrete_sequence=px.colors.qualitative.Pastel,
+        text='Percentage'
     )
+    fig2.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
     fig2.update_layout(**layout_settings)
+    fig2.update_yaxes(range=[0, 100])
+    fig2.update_xaxes(tickangle=0)
     
     # Chart 3: Pie Chart for Student Suggestions
     suggestion_counts = df['suggestion_category'].value_counts().reset_index()
@@ -113,11 +182,17 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
         names='Suggestion', 
         values='Count',
         title="Saran Mahasiswa Kedepannya",
-        color_discrete_sequence=px.colors.qualitative.Pastel
+        color_discrete_sequence=px.colors.qualitative.Pastel,
+        hole=0.5
     )
     fig3.update_layout(**layout_settings)
+    fig3.update_layout(legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
     
     # Build HTML
+    gen_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    survey_file = os.path.basename(config_module.SURVEY_FILE_PATH)
+    grades_file = os.path.basename(config_module.GRADES_FILE_PATH)
+    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="id">
@@ -136,6 +211,7 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
                 --spacing-xs: 8px;
                 --spacing-sm: 16px;
                 --spacing-md: 24px;
+                --border-color: #E5E7EB;
             }}
 
             @media (prefers-color-scheme: dark) {{
@@ -144,6 +220,7 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
                     --surface: #1F2937;
                     --text-main: #F9FAFB;
                     --text-muted: #9CA3AF;
+                    --border-color: #374151;
                 }}
             }}
 
@@ -154,16 +231,15 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
                 margin: 0;
                 display: flex;
                 justify-content: center;
-                align-items: center;
+                align-items: flex-start;
                 min-height: 100vh;
+                box-sizing: border-box;
             }}
 
             .dashboard-wrapper {{
                 width: 100%;
                 max-width: 1920px;
-                height: 100vh;
-                max-height: 1080px;
-                aspect-ratio: 16/9;
+                min-height: 100vh;
                 padding: var(--spacing-md);
                 box-sizing: border-box;
                 display: flex;
@@ -171,19 +247,16 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
                 gap: var(--spacing-md);
             }}
 
-            @media (max-width: 1920px) or (max-height: 1080px) {{
-                .dashboard-wrapper {{
-                    height: auto;
-                    max-height: none;
-                    aspect-ratio: auto;
-                    min-height: 100vh;
-                }}
-            }}
-
             h1, h2, h3 {{ color: var(--text-main); font-weight: 600; margin-top: 0; }}
             h1 {{ margin-bottom: 4px; }}
             
             .header-text {{ margin-top: 0; color: var(--text-muted); }}
+            
+            .section-title {{
+                margin-top: var(--spacing-md);
+                padding-bottom: var(--spacing-xs);
+                border-bottom: 2px solid var(--border-color);
+            }}
 
             .card {{
                 background-color: var(--surface);
@@ -204,33 +277,77 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
             }}
 
             .kpi-card h2 {{ color: #FFFFFF; margin-bottom: 8px; }}
-            .kpi-card p {{ margin: 0; font-size: 1.1rem; }}
+            .kpi-card p {{ margin: 0; font-size: 1.1rem; line-height: 1.5; }}
             .kpi-card strong {{ color: #FFFFFF; }}
+            .kpi-card em {{ opacity: 0.9; font-size: 0.95rem; }}
 
-            .charts-grid {{
+            .charts-grid-3 {{
                 display: grid;
-                grid-template-columns: 1fr 1fr;
+                grid-template-columns: repeat(3, 1fr);
                 gap: var(--spacing-md);
-                flex: 1;
-                min-height: 0; /* Important for flex child with overflow */
             }}
 
-            @media (max-width: 1024px) {{
-                .charts-grid {{
+            .charts-grid-1 {{
+                display: grid;
+                grid-template-columns: 1fr;
+                max-width: 800px;
+                margin: 0 auto;
+                width: 100%;
+            }}
+
+            @media (max-width: 1200px) {{
+                .charts-grid-3 {{
                     grid-template-columns: 1fr;
                 }}
             }}
             
             .chart-container {{
-                height: 100%;
-                min-height: 300px; /* Minimum height for responsive fallback */
+                height: 400px;
                 position: relative;
+                width: 100%;
+            }}
+
+            .summary-table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: var(--spacing-md);
+                background-color: var(--surface);
+                border-radius: var(--border-radius);
+                overflow: hidden;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            }}
+            
+            .summary-table th, .summary-table td {{
+                padding: 12px 16px;
+                text-align: left;
+                border-bottom: 1px solid var(--border-color);
+            }}
+            
+            .summary-table th {{
+                background-color: rgba(79, 70, 229, 0.1);
+                color: var(--text-main);
+                font-weight: 600;
+            }}
+            
+            .summary-table tr:last-child td {{
+                border-bottom: none;
             }}
 
             .footnote {{
                 font-size: 0.875rem;
                 color: var(--text-muted);
                 margin-top: var(--spacing-sm);
+                text-align: right;
+            }}
+            
+            .dashboard-footer {{
+                margin-top: auto;
+                padding-top: var(--spacing-md);
+                border-top: 1px solid var(--border-color);
+                color: var(--text-muted);
+                font-size: 0.875rem;
+                display: flex;
+                justify-content: space-between;
             }}
         </style>
     </head>
@@ -246,7 +363,9 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
                 <p>{summary_text}</p>
             </div>
             
-            <div class="charts-grid">
+            <h2 class="section-title">Kinerja Pengelompokan Saat Ini</h2>
+            
+            <div class="charts-grid-3">
                 <div class="card">
                     <div class="chart-container">
                         {fig1.to_html(full_html=False, include_plotlyjs='cdn')}
@@ -262,14 +381,25 @@ def generate_dashboard(df: pd.DataFrame, config_module) -> None:
                         {fig2.to_html(full_html=False, include_plotlyjs=False)}
                     </div>
                 </div>
+            </div>
+            
+            {f'<div class="footnote">* Menandakan kategori dengan responden kurang dari {min_sample}.</div>' if has_small_sample else ''}
+            
+            {table_html}
+            
+            <h2 class="section-title">Preferensi Masa Depan</h2>
+            
+            <div class="charts-grid-1">
                 <div class="card">
                     <div class="chart-container">
                         {fig3.to_html(full_html=False, include_plotlyjs=False)}
                     </div>
-                    <div class="footnote">
-                        * Menandakan kategori dengan responden kurang dari {min_sample}.
-                    </div>
                 </div>
+            </div>
+            
+            <div class="dashboard-footer">
+                <div>Dihasilkan pada: {gen_time}</div>
+                <div>Sumber Data: {survey_file}, {grades_file}</div>
             </div>
         </div>
     </body>
