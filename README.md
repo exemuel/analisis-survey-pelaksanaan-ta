@@ -2,7 +2,7 @@
 
 This program analyzes the relationship between students' grouping strategies for their final project (Tugas Akhir I) and their academic performance and satisfaction. It processes survey and grade data to generate an interactive, static HTML dashboard for easy visualization and decision-making.
 
-![dashboard_image](images/dashboard-sc.png)
+![dashboard_image](images/dashboard.png)
 
 ## Features
 
